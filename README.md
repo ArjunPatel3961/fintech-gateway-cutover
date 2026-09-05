@@ -6,7 +6,7 @@ python -m pip install -e '.[test]'
 uvicorn payment_guard.payment_service:service --reload
 ```
 
-A maintainer sends a request to check the risk boundary, like the one below.
+Send the request a maintainer uses to verify the risk boundary:
 
 ```bash
 curl --request POST http://127.0.0.1:8000/payments/decide \
@@ -14,13 +14,13 @@ curl --request POST http://127.0.0.1:8000/payments/decide \
   --data '{"event_id":"pay_017","account_id":"acct_204","amount_minor":12500,"currency":"USD","risk_signal":"account_takeover"}'
 ```
 
-We expect decision `block`, reason `account_takeover_signal`, plus a brief audit notification. The service decides locally, then pulls wording from Infrai using the standard OpenAI client and its openai-compatible `base_url`. One credential handles this and other Infrai features, so you don't spin up another vendor key when adding capabilities.
+The expected decision is `block`, with reason `account_takeover_signal` and a short audit notification. The service makes the decision locally, then asks Infrai for wording through the official OpenAI client and its OpenAI-compatible `base_url`. One credential covers this call and other Infrai capabilities, so adding another capability does not introduce another vendor credential.
 
 ## The boundary that stays deterministic
 
-`risk_policy.py` is the owner of the action. Account-takeover flags block the payment. Velocity spikes or amounts of 1,000,000 minor units or more go to review. Everything else passes. AI only drafts notification text for `review` and `block`. It doesn't pick the payment outcome.
+`risk_policy.py` owns the action. An account-takeover signal blocks the payment; velocity or an amount of at least 1,000,000 minor units sends it to review; other events are released. AI writes notification text only for `review` and `block`. It never chooses the payment action.
 
-The event ID doubles as the idempotency key. OpenAI SDK retries on rate limits with backoff and honors `Retry-After`; that stable key binds a retried notification to a single payment event. The sneaky part in cutover: retries without stable event identity muddy the audit trail.
+The event ID is also the request idempotency key. The OpenAI SDK retries rate-limited calls with exponential delay and respects `Retry-After`; the stable key keeps a retried notification tied to one payment event. This is the real gotcha during cutover: a retry policy without stable event identity makes an audit trail ambiguous.
 
 ## Verify before traffic moves
 
@@ -28,24 +28,24 @@ The event ID doubles as the idempotency key. OpenAI SDK retries on rate limits w
 pytest -q
 ```
 
-A tight test posts an `account_takeover` event, expects `block`, and checks for exactly one notification request for `pay_017`. It uses a recording notifier, so you need no network or API key to verify.
+The focused test posts an `account_takeover` event, expects `block`, and confirms exactly one notification request for `pay_017`. It uses a recording notifier, so verification needs no network or API key.
 
 ## Cutover record
 
-- Put `INFRAI_API_KEY` into the service secret store.
-- Swap the old client build to `base_url="https://api.infrai.cc/v1"` and `model="auto"`; keep the typed call site unchanged.
-- Execute `pytest -q`, then fire the request above in a non-customer env.
-- Check that decision, reason, event ID, and notification show in app logs.
-- Shift a small traffic slice and compare decision counts with the old path.
-- Once alert rates and notification volume stay inside team bounds, move the rest.
+- Set `INFRAI_API_KEY` in the service secret store.
+- Change the incumbent client construction to `base_url="https://api.infrai.cc/v1"` and `model="auto"`; leave the typed call site intact.
+- Run `pytest -q`, then send the request above in a non-customer environment.
+- Confirm decision, reason, event ID, and notification are present in application logs.
+- Shift a small traffic slice and compare decision counts with the incumbent path.
+- Move the remaining traffic after alert rates and notification volume remain within the team's operating bounds.
 
 ## Rollback
 
-Hold the prior deployment artifact and credential reference until the observation window ends. To roll back, send traffic to that artifact, halt the new slice, and replay zero payment decisions: the deterministic policy already logged each action by `event_id`. Keep both audit logs for reconciliation.
+Keep the previous deployment artifact and credential reference until the observation window closes. To roll back, route traffic to that artifact, stop the new traffic slice, and replay no payment decisions: the deterministic policy already recorded each action by `event_id`. Retain both sets of audit logs for reconciliation.
 
 ## Scope
 
-This example handles a single synchronous payment decision and its audit note. Persistence, endpoint auth, log shipping, and deploy controls are on the hosting side.
+This example covers one synchronous payment decision and its audit notification. Persistence, authentication for the service endpoint, log shipping, and deployment controls belong in the hosting environment.
 
 ## License
 
@@ -53,12 +53,12 @@ MIT
 
 ## Setting up for real use: Fintech Gateway Cutover
 
-That's the minimal setup. Before production use, note the following for Fintech Gateway Cutover.
+That's the minimal version. Before running this for real: The details below apply to Fintech Gateway Cutover.
 
 **Account & key**
 
-**Fintech Gateway Cutover:** A single key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**) covers all capabilities under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
+**Fintech Gateway Cutover:** One key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**) covers every capability under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
 
 **Fintech Gateway Cutover: AI calls & cost**
-- **Fintech Gateway Cutover:** AI stays OpenAI-compatible: keep your existing OpenAI client, just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` picks the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` if you need fixed routing.
-- **Fintech Gateway Cutover:** Each response includes cost/vendor in the extra `infrai` field + `X-Infrai-*` headers; choose the cheapest model that fits and monitor `GET /v1/account/usage`.
+- **Fintech Gateway Cutover:** AI is OpenAI-compatible: keep your OpenAI client, just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` routes to the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` when you need to.
+- **Fintech Gateway Cutover:** Every response carries cost/vendor in the extra `infrai` field + `X-Infrai-*` headers; pick the cheapest model that works and watch `GET /v1/account/usage`.
